@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, dialog, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 // 引入 nut-js 屏幕模块
@@ -46,16 +46,11 @@ function createWindow() {
 
     mainWindow.loadFile('index.html');
 
-    globalShortcut.register('F1', () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('toggle-moyu');
-        }
-    });
-
     mainWindow.on('close', () => {
         saveWindowConfig(mainWindow);
     });
 }
+
 // ========== 改造：全局实时取色 ==========
 ipcMain.handle('color-picker:start', async () => {
     try {
@@ -78,6 +73,7 @@ ipcMain.handle('color-picker:start', async () => {
         return { error: err.message };
     }
 });
+
 ipcMain.handle('dialog:open-epub', async () => {
     const result = await dialog.showOpenDialog({
         title: '选择 EPUB 电子书',
@@ -96,10 +92,6 @@ ipcMain.handle('dialog:open-epub', async () => {
 
 app.whenReady().then(() => {
     createWindow();
-});
-
-app.on('will-quit', () => {
-    globalShortcut.unregisterAll();
 });
 
 app.on('window-all-closed', () => {
