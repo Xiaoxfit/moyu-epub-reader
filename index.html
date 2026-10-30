@@ -148,7 +148,7 @@
         <label>字体大小：<span id="font-size-val">16px</span></label>
         <input type="range" id="font-size-range" min="12" max="32" step="1" value="16">
 
-        <!-- 新增：文末注释隐藏开关 -->
+        <!-- 文末注释隐藏开关 -->
         <label>阅读优化：</label>
         <button id="toggle-footnotes-btn" style="background: #e0e0e0; color: #333;">📖 隐藏文末注释：已开启</button>
     </div>
@@ -200,10 +200,8 @@
                     font-family: ${font} !important;
                 }
 
-                /* ========== 隐藏文末/页面中的各种注释、尾注、脚注内容块 ========== */
                 aside[epub|type~="endnote"],
                 aside[epub|type~="footnote"],
-                aside|type~="note"], /* 兼容部分旧规范 */
                 aside[epub|type~="rearnote"],
                 div.endnotes,
                 div.footnotes,
@@ -216,7 +214,7 @@
                 }
             `;
         }
-        // 应用电子书内部样式
+
         function applyStyles() {
             if (!view?.renderer) return;
             if (typeof view.renderer.setStyles === 'function') {
@@ -224,13 +222,11 @@
             }
         }
 
-        // 隐藏脚注弹窗
         function hideFootnotePopup() {
             const popup = document.getElementById('footnote-popup');
             if (popup) popup.style.display = 'none';
         }
 
-        // 显示脚注弹窗内容
         function showFootnote(html) {
             const popup = document.getElementById('footnote-popup');
             const contentDiv = document.getElementById('footnote-content');
@@ -238,7 +234,6 @@
             popup.style.display = 'block';
         }
 
-        // 初始化系统字体列表
         async function initSystemFonts() {
             const fontSelect = document.getElementById('font-select');
             const savedFont = localStorage.getItem('moyu_epub_font') || 'sans-serif';
@@ -270,7 +265,6 @@
             fontSelect.value = savedFont;
         }
 
-        // 填充图书目录下拉菜单（支持层级缩进与 href 绑定）
         function populateTOC(toc) {
             const tocSelect = document.getElementById('toc-select');
             tocSelect.innerHTML = '<option value="">-- 选择章节跳转 --</option>';
@@ -279,7 +273,6 @@
                 if (!items) return;
                 items.forEach(item => {
                     const option = document.createElement('option');
-                    // 确保 value 干净可用
                     option.value = item.href || '';
                     option.textContent = '\u00A0\u00A0'.repeat(level) + (item.label || '').trim();
                     tocSelect.appendChild(option);
@@ -291,7 +284,6 @@
             addItems(toc);
         }
 
-        // 提取并显示脚注内容
         async function tryShowFootnote(href, a) {
             if (!view?.book) return false;
 
@@ -340,6 +332,53 @@
             }
         }
 
+        // 统一的摸鱼模式切换函数
+        function toggleMoyuMode() {
+            isMoyuMode = !isMoyuMode;
+            const settingsBtn = document.getElementById('settings-btn');
+            const settingsPanel = document.getElementById('settings-panel');
+            const topBar = document.getElementById('top-bar');
+
+            if (isMoyuMode) {
+                settingsBtn.style.display = 'none';
+                settingsPanel.style.display = 'none';
+                topBar.style.display = 'none';
+                document.documentElement.style.borderRadius = '0';
+                document.body.style.borderRadius = '0';
+                document.body.style.border = 'none';
+                document.documentElement.style.border = 'none';
+            } else {
+                settingsBtn.style.display = 'block';
+                topBar.style.display = 'block';
+                document.documentElement.style.borderRadius = '8px';
+                document.body.style.borderRadius = '8px';
+                document.body.style.border = '1px solid rgba(0,0,0,0.12)';
+                document.documentElement.style.border = '1px solid rgba(0,0,0,0.12)';
+            }
+        }
+
+        // 统一的键盘导航与快捷键处理函数（防止焦点丢失或重复绑定）
+        function handleKeyNavigation(e) {
+            // 如果焦点在输入框、下拉菜单等元素上，不拦截
+            if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+
+            if (e.key === 'F1') {
+                e.preventDefault();
+                toggleMoyuMode();
+                return;
+            }
+
+            if (!view) return;
+
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                view.prev();
+            } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                view.next();
+            }
+        }
+
         // 加载并渲染 EPUB 书籍
         async function loadBook(filePath) {
             if (!filePath) return;
@@ -359,12 +398,10 @@
             view = document.createElement('foliate-view');
             document.getElementById('viewer').appendChild(view);
 
-            // 监听阅读位置改变以保存进度，并实时更新下拉菜单的当前选中项
             view.addEventListener('relocate', (e) => {
                 if (isInitializing) return;
                 const detail = e.detail;
                 
-                // 1. 保存进度
                 const cfi = detail?.cfi;
                 if (cfi) {
                     clearTimeout(view._saveTimer);
@@ -373,12 +410,10 @@
                     }, 300);
                 }
 
-                // 2. 实时更新下拉菜单的当前章节，并设置为粗体显示
                 const tocItem = detail?.tocItem;
                 if (tocItem && tocItem.href) {
                     const tocSelect = document.getElementById('toc-select');
                     if (tocSelect) {
-                        // 遍历所有选项，移除之前加过的粗体标记，并恢复普通样式
                         for (let option of tocSelect.options) {
                             if (option.dataset.originalText) {
                                 option.textContent = option.dataset.originalText;
@@ -386,7 +421,6 @@
                             }
                         }
 
-                        // 找到当前匹配的 option
                         let matchedOption = null;
                         for (let option of tocSelect.options) {
                             if (option.value === tocItem.href || (tocItem.href.includes('#') && option.value.includes(tocItem.href.split('#')[0]))) {
@@ -397,13 +431,9 @@
 
                         if (matchedOption) {
                             tocSelect.value = matchedOption.value;
-                            
-                            // 备份原文本（如果还没备份过）
                             if (!matchedOption.dataset.originalText) {
                                 matchedOption.dataset.originalText = matchedOption.textContent.trim();
                             }
-                            
-                            // 改变当前选中项为粗体，并加上一个小图标或标记让你一眼看出
                             matchedOption.textContent = '📌 ' + matchedOption.dataset.originalText;
                             matchedOption.style.fontWeight = 'bold';
                         }
@@ -411,7 +441,6 @@
                 }
             });
 
-            // 链接与脚注点击处理
             view.addEventListener('link', async (e) => {
                 const { a, href } = e.detail || {};
                 if (!href) return;
@@ -430,12 +459,10 @@
                 }
             });
 
-            // 页面加载完成事件：绑定滚轮翻页及点击关闭弹窗
             view.addEventListener('load', (e) => {
                 const doc = e.detail?.doc;
                 if (!doc) return;
                 
-                // 【修改】读取本地存储的开关状态（默认 'true' 开启隐藏）
                 const hideFootnotesEnabled = localStorage.getItem('moyu_epub_hide_footnotes') !== 'false';
 
                 if (hideFootnotesEnabled) {
@@ -464,9 +491,7 @@
                     }, 50);
                 }
 
-                // 滚轮翻页处理
-
-                
+                // 滚轮翻页
                 if (doc._wheelHandler) {
                     doc.removeEventListener('wheel', doc._wheelHandler, { passive: false });
                 }
@@ -480,10 +505,9 @@
                         view.prev();
                     }
                 };
-
                 doc.addEventListener('wheel', doc._wheelHandler, { passive: false });
 
-                // 3. 点击关闭弹窗处理
+                // 点击关闭弹窗
                 if (doc._clickCloseHandler) {
                     doc.removeEventListener('click', doc._clickCloseHandler);
                 }
@@ -491,27 +515,15 @@
                     hideFootnotePopup();
                 };
                 doc.addEventListener('click', doc._clickCloseHandler);
-                // ========== 新增：键盘方向键翻页支持 ==========
-                // 1. 监听主窗口的键盘事件
-                window.addEventListener('keydown', (e) => {
-                    if (!view) return;
-                
-                    // 如果当前焦点在输入框、下拉菜单等元素上，不拦截键盘事件
-                    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
 
-                    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-                        e.preventDefault();
-                        view.prev(); // 左、上键：上一页
-                    } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-                        e.preventDefault();
-                        view.next(); // 右、下键：下一页
-                    }
-                });
-
-
+                // 【优化】安全地在内部 iframe/doc 绑定键盘导航（防止重复绑定）
+                if (doc._keyHandler) {
+                    doc.removeEventListener('keydown', doc._keyHandler);
+                }
+                doc._keyHandler = handleKeyNavigation;
+                doc.addEventListener('keydown', doc._keyHandler);
             });
 
-            // 读取本地文件流
             let file;
             try {
                 const buffer = fs.readFileSync(filePath);
@@ -539,7 +551,6 @@
                 populateTOC(view.book.toc);
             }
 
-            // 恢复阅读进度
             const storageKey = getStorageKey(filePath);
             const savedCfi = localStorage.getItem(storageKey);
 
@@ -565,17 +576,17 @@
         window.addEventListener('load', async () => {
             await initSystemFonts();
 
-            // 恢复保存的背景颜色
+            // 【优化】在主窗口全局绑定一次键盘快捷键监听
+            window.addEventListener('keydown', handleKeyNavigation);
+
             const savedBg = localStorage.getItem('moyu_epub_bg_color');
             if (savedBg) document.body.style.backgroundColor = savedBg;
 
-            // 恢复上次阅读的书籍
             const lastBookPath = localStorage.getItem('moyu_epub_last_path');
             if (lastBookPath && fs.existsSync(lastBookPath)) {
                 await loadBook(lastBookPath);
             }
 
-            // 打开本地 EPUB 文件按钮事件
             document.getElementById('open-file-btn').addEventListener('click', async () => {
                 const filePath = await ipcRenderer.invoke('dialog:open-epub');
                 if (filePath) {
@@ -585,7 +596,6 @@
                 }
             });
 
-            // 目录跳转事件
             document.getElementById('toc-select').addEventListener('change', async (e) => {
                 const href = e.target.value;
                 if (href && view) {
@@ -598,49 +608,23 @@
                 }
             });
 
-            // 摸鱼模式（F1快捷键触发）切换
             const settingsBtn = document.getElementById('settings-btn');
             const settingsPanel = document.getElementById('settings-panel');
-            const topBar = document.getElementById('top-bar');
 
-            ipcRenderer.on('toggle-moyu', () => {
-                isMoyuMode = !isMoyuMode;
-                if (isMoyuMode) {
-                    settingsBtn.style.display = 'none';
-                    settingsPanel.style.display = 'none';
-                    topBar.style.display = 'none';
-                    document.documentElement.style.borderRadius = '0';
-                    document.body.style.borderRadius = '0';
-                    document.body.style.border = 'none';
-                    document.documentElement.style.border = 'none';
-                } else {
-                    settingsBtn.style.display = 'block';
-                    topBar.style.display = 'block';
-                    document.documentElement.style.borderRadius = '8px';
-                    document.body.style.borderRadius = '8px';
-                    document.body.style.border = '1px solid rgba(0,0,0,0.12)';
-                    document.documentElement.style.border = '1px solid rgba(0,0,0,0.12)';
-                }
-            });
-
-            // 菜单按钮点击切换设置面板显示状态
             settingsBtn.addEventListener('click', () => {
-                const settingsPanel = document.getElementById('settings-panel');
                 settingsPanel.style.display =
                     settingsPanel.style.display === 'block' ? 'none' : 'block';
             });
 
-            // 点击空白处关闭菜单与脚注弹窗
             window.addEventListener('click', (e) => {
                 if (!e.target.closest('#footnote-popup') &&
                     !e.target.closest('#settings-btn') &&
                     !e.target.closest('#settings-panel')) {
                     hideFootnotePopup();
-                    document.getElementById('settings-panel').style.display = 'none';
+                    settingsPanel.style.display = 'none';
                 }
             });
 
-            // 全局屏幕实时取色器
             document.getElementById('color-picker-btn').addEventListener('click', async () => {
                 settingsPanel.style.display = 'none';
                 
@@ -687,13 +671,11 @@
                 window.addEventListener('keydown', onKeydown);
             });
 
-            // 字体选择改变事件
             document.getElementById('font-select').addEventListener('change', (e) => {
                 localStorage.setItem('moyu_epub_font', e.target.value);
                 applyStyles();
             });
 
-            // 字体大小调节滑块事件
             const fontSizeRange = document.getElementById('font-size-range');
             const fontSizeVal = document.getElementById('font-size-val');
             const savedFontSize = localStorage.getItem('moyu_epub_font_size') || '16px';
@@ -707,11 +689,9 @@
                 applyStyles();
             });
             
-            // ========== 新增：文末注释隐藏开关的交互逻辑 ==========
             const toggleFootnotesBtn = document.getElementById('toggle-footnotes-btn');
             let isHideFootnotes = localStorage.getItem('moyu_epub_hide_footnotes') !== 'false';
 
-            // 更新按钮显示的文案与样式
             function updateFootnotesBtnUI() {
                 if (isHideFootnotes) {
                     toggleFootnotesBtn.textContent = '📖 隐藏文末注释：已开启';
@@ -725,13 +705,11 @@
             }
             updateFootnotesBtnUI();
 
-            // 点击按钮切换状态，并刷新当前页面生效
             toggleFootnotesBtn.addEventListener('click', async () => {
                 isHideFootnotes = !isHideFootnotes;
                 localStorage.setItem('moyu_epub_hide_footnotes', isHideFootnotes);
                 updateFootnotesBtnUI();
 
-                // 切换后如果当前有打开的书籍，重新加载当前章节让设置立刻生效
                 if (view && currentBookPath) {
                     try {
                         const currentCfi = view.lastLocation?.cfi;
