@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>EPUB Reader (foliate-js)</title>
+    <style>
+        /* 基础窗口与全局重置样式 */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #f7f7f7;
+            border: 1px solid rgba(0,0,0,0.12);
+            border-radius: 8px;
+            transition: background-color 0.3s;
+        }
+
+        /* 顶部拖拽栏样式 */
+        #top-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 30px;
+            -webkit-app-region: drag;
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            padding-left: 8px;
+        }
+
+        /* 菜单按钮样式 */
+        #settings-btn {
+            -webkit-app-region: no-drag;
+            background: rgba(0, 0, 0, 0.4);
+            color: white;
+            border: none;
+            padding: 2px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            opacity: 0.3;
+            transition: opacity 0.3s;
+        }
+        #settings-btn:hover { opacity: 1; }
+
+        /* 设置菜单弹窗面板样式 */
+        #settings-panel {
+            position: fixed;
+            top: 35px;
+            left: 8px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 10000;
+            display: none;
+            font-size: 14px;
+            width: 240px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        #settings-panel label {
+            display: block;
+            margin-top: 10px;
+            margin-bottom: 6px;
+            color: #333;
+            font-weight: bold;
+        }
+        #settings-panel label:first-child { margin-top: 0; }
+        #settings-panel button,
+        #settings-panel select,
+        #settings-panel input[type="range"] {
+            width: 100%;
+            padding: 6px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+
+        /* 脚注悬浮弹窗样式 */
+        #footnote-popup {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.96);
+            color: #2c3e50;
+            padding: 15px 20px;
+            border-radius: 8px;
+            max-width: 80%;
+            max-height: 40vh;
+            overflow-y: auto;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+            border: 1px solid #e1e4e8;
+            z-index: 20000;
+            display: none;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        /* 阅读器主容器 */
+        #viewer {
+            width: 100%;
+            height: 100%;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        foliate-view {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 顶部控制栏 -->
+    <div id="top-bar">
+        <button id="settings-btn" title="菜单">⚙️ 菜单</button>
+    </div>
+
+    <!-- 阅读器挂载容器 -->
+    <div id="viewer"></div>
+
+    <!-- 下拉设置面板 -->
+    <div id="settings-panel">
+        <label>快捷键【F1】切换沉浸式阅读</label>
+        <label>书籍操作：</label>
+        <button id="open-file-btn">📂 打开本地 EPUB...</button>
+
+        <label>书籍目录：</label>
+        <select id="toc-select">
+            <option value="">加载目录中...</option>
+        </select>
+
+        <label>屏幕背景融合：</label>
+        <button id="color-picker-btn">🎯 屏幕取色器</button>
+        
+        <label>字体选择：</label>
+        <select id="font-select">
+            <option value="sans-serif">默认系统字体</option>
+        </select>
+
+        <label>字体大小：<span id="font-size-val">16px</span></label>
+        <input type="range" id="font-size-range" min="12" max="32" step="1" value="16">
+
+        <!-- 新增：文末注释隐藏开关 -->
+        <label>阅读优化：</label>
+        <button id="toggle-footnotes-btn" style="background: #e0e0e0; color: #333;">📖 隐藏文末注释：已开启</button>
+    </div>
+
+    <!-- 脚注弹窗容器 -->
+    <div id="footnote-popup">
+        <div id="footnote-content">加载注释中...</div>
+    </div>
+
+    <script type="module">
+        import './foliate-js/view.js';
+
+        const { ipcRenderer } = require('electron');
+        const fs = require('fs');
+        const path = require('path');
+
+        let view = null;
+        let currentBookPath = null;
+        let isInitializing = false;
+        let isMoyuMode = false;
+
+        // 获取本地存储进度对应的键名
+        function getStorageKey(bookPath) {
+            return `moyu_epub_last_cfi_${bookPath || 'default'}`;
+        }
+
+        // 生成注入到电子书内部的自定义样式
+        function getBookStyles() {
+            const font = localStorage.getItem('moyu_epub_font') || 'sans-serif';
+            const size = localStorage.getItem('moyu_epub_font_size') || '16px';
+            return `
+                @namespace epub "http://www.idpf.org/2007/ops";
+                
+                body, p, div, span, li, td, th {
+                    font-family: ${font} !important;
+                    font-size: ${size} !important;
+                }
+
+                h1, h2, h3, .chapter-title, .title {
+                    background-color: #f7f3e8 !important;
+                    border: 2px dashed #b5a48b !important;
+                    border-radius: 8px !important;
+                    padding: 8px 12px !important;
+                    margin: 10px auto !important;
+                    text-align: center !important;
+                    color: #4a3b32 !important;
+                    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.03);
+                    font-weight: normal;
+                    font-family: ${font} !important;
+                }
+
+                /* ========== 隐藏文末/页面中的各种注释、尾注、脚注内容块 ========== */
+                aside[epub|type~="endnote"],
+                aside[epub|type~="footnote"],
+                aside|type~="note"], /* 兼容部分旧规范 */
+                aside[epub|type~="rearnote"],
+                div.endnotes,
+                div.footnotes,
+                section.endnotes,
+                section.footnotes,
+                .endnote,
+                .footnote,
+                .rear-note {
+                    display: none !important;
+                }
+            `;
+        }
+        // 应用电子书内部样式
+        function applyStyles() {
+            if (!view?.renderer) return;
+            if (typeof view.renderer.setStyles === 'function') {
+                view.renderer.setStyles(getBookStyles());
+            }
+        }
+
+        // 隐藏脚注弹窗
+        function hideFootnotePopup() {
+            const popup = document.getElementById('footnote-popup');
+            if (popup) popup.style.display = 'none';
+        }
+
+        // 显示脚注弹窗内容
+        function showFootnote(html) {
+            const popup = document.getElementById('footnote-popup');
+            const contentDiv = document.getElementById('footnote-content');
+            contentDiv.innerHTML = html || '无内容';
+            popup.style.display = 'block';
+        }
+
+        // 初始化系统字体列表
+        async function initSystemFonts() {
+            const fontSelect = document.getElementById('font-select');
+            const savedFont = localStorage.getItem('moyu_epub_font') || 'sans-serif';
+            
+            let optionsHtml = `<option value="sans-serif">默认系统字体</option>`;
+            
+            try {
+                if ('queryLocalFonts' in window) {
+                    const availableFonts = await window.queryLocalFonts();
+                    const fontSet = new Set();
+                    availableFonts.forEach(font => {
+                        if (font.family) fontSet.add(font.family);
+                    });
+                    Array.from(fontSet).sort().forEach(fontName => {
+                        optionsHtml += `<option value="${fontName}">${fontName}</option>`;
+                    });
+                } else {
+                    ['SimSun', 'Microsoft YaHei', 'KaiTi', 'SimHei', 'FangSong', 'Arial', 'Times New Roman'].forEach(fontName => {
+                        optionsHtml += `<option value="${fontName}">${fontName}</option>`;
+                    });
+                }
+            } catch (err) {
+                ['SimSun', 'Microsoft YaHei', 'KaiTi', 'SimHei', 'FangSong'].forEach(fontName => {
+                    optionsHtml += `<option value="${fontName}">${fontName}</option>`;
+                });
+            }
+
+            fontSelect.innerHTML = optionsHtml;
+            fontSelect.value = savedFont;
+        }
+
+        // 填充图书目录下拉菜单（支持层级缩进与 href 绑定）
+        function populateTOC(toc) {
+            const tocSelect = document.getElementById('toc-select');
+            tocSelect.innerHTML = '<option value="">-- 选择章节跳转 --</option>';
+            
+            function addItems(items, level = 0) {
+                if (!items) return;
+                items.forEach(item => {
+                    const option = document.createElement('option');
+                    // 确保 value 干净可用
+                    option.value = item.href || '';
+                    option.textContent = '\u00A0\u00A0'.repeat(level) + (item.label || '').trim();
+                    tocSelect.appendChild(option);
+                    if (item.subitems?.length) {
+                        addItems(item.subitems, level + 1);
+                    }
+                });
+            }
+            addItems(toc);
+        }
+
+        // 提取并显示脚注内容
+        async function tryShowFootnote(href, a) {
+            if (!view?.book) return false;
+
+            try {
+                const resolved = await Promise.resolve(view.book.resolveHref(href));
+                if (!resolved) return false;
+
+                const { index, anchor } = resolved;
+                const section = view.book.sections[index];
+                if (!section) return false;
+
+                const doc = await section.createDocument?.();
+                if (!doc) return false;
+
+                let el = null;
+                if (typeof anchor === 'function') {
+                    el = anchor(doc);
+                }
+
+                if (!el) {
+                    const id = href.includes('#') ? href.split('#').pop() : null;
+                    if (id) {
+                        el = doc.getElementById(id) ||
+                             doc.querySelector(`[id="${id}"]`) ||
+                             doc.querySelector(`[name="${id}"]`);
+                    }
+                }
+
+                if (!el) return false;
+
+                let contentEl = el;
+                while (contentEl && contentEl.matches?.('a, span, sup, sub, em, strong, i, b')) {
+                    contentEl = contentEl.parentElement;
+                }
+
+                if (!contentEl || contentEl === doc.body) {
+                    contentEl = el.nextElementSibling || el.parentElement;
+                }
+
+                const html = contentEl?.innerHTML || el.innerHTML || el.textContent || a?.innerText || href;
+                showFootnote(html);
+                return true;
+            } catch (err) {
+                console.warn('脚注提取失败', err);
+                return false;
+            }
+        }
+
+        // 加载并渲染 EPUB 书籍
+        async function loadBook(filePath) {
+            if (!filePath) return;
+
+            if (view) {
+                try {
+                    view.close();
+                    view.remove();
+                } catch (e) {}
+                view = null;
+            }
+
+            document.getElementById('viewer').innerHTML = '';
+            currentBookPath = filePath;
+            isInitializing = true;
+
+            view = document.createElement('foliate-view');
+            document.getElementById('viewer').appendChild(view);
+
+            // 监听阅读位置改变以保存进度，并实时更新下拉菜单的当前选中项
+            view.addEventListener('relocate', (e) => {
+                if (isInitializing) return;
+                const detail = e.detail;
+                
+                // 1. 保存进度
+                const cfi = detail?.cfi;
+                if (cfi) {
+                    clearTimeout(view._saveTimer);
+                    view._saveTimer = setTimeout(() => {
+                        localStorage.setItem(getStorageKey(filePath), cfi);
+                    }, 300);
+                }
+
+                // 2. 实时更新下拉菜单的当前章节，并设置为粗体显示
+                const tocItem = detail?.tocItem;
+                if (tocItem && tocItem.href) {
+                    const tocSelect = document.getElementById('toc-select');
+                    if (tocSelect) {
+                        // 遍历所有选项，移除之前加过的粗体标记，并恢复普通样式
+                        for (let option of tocSelect.options) {
+                            if (option.dataset.originalText) {
+                                option.textContent = option.dataset.originalText;
+                                option.style.fontWeight = 'normal';
+                            }
+                        }
+
+                        // 找到当前匹配的 option
+                        let matchedOption = null;
+                        for (let option of tocSelect.options) {
+                            if (option.value === tocItem.href || (tocItem.href.includes('#') && option.value.includes(tocItem.href.split('#')[0]))) {
+                                matchedOption = option;
+                                break;
+                            }
+                        }
+
+                        if (matchedOption) {
+                            tocSelect.value = matchedOption.value;
+                            
+                            // 备份原文本（如果还没备份过）
+                            if (!matchedOption.dataset.originalText) {
+                                matchedOption.dataset.originalText = matchedOption.textContent.trim();
+                            }
+                            
+                            // 改变当前选中项为粗体，并加上一个小图标或标记让你一眼看出
+                            matchedOption.textContent = '📌 ' + matchedOption.dataset.originalText;
+                            matchedOption.style.fontWeight = 'bold';
+                        }
+                    }
+                }
+            });
+
+            // 链接与脚注点击处理
+            view.addEventListener('link', async (e) => {
+                const { a, href } = e.detail || {};
+                if (!href) return;
+
+                const epubType = a?.getAttribute?.('epub:type') || a?.getAttribute?.('epubtype') || '';
+                const isLikelyNote = epubType.includes('noteref') ||
+                                    /note|fn|footnote|#/i.test(href) ||
+                                    (a && (a.closest('sup') || getComputedStyle(a).verticalAlign === 'super'));
+
+                if (isLikelyNote) {
+                    e.preventDefault();
+                    const success = await tryShowFootnote(href, a);
+                    if (!success) {
+                        view.goTo(href).catch(() => {});
+                    }
+                }
+            });
+
+            // 页面加载完成事件：绑定滚轮翻页及点击关闭弹窗
+            view.addEventListener('load', (e) => {
+                const doc = e.detail?.doc;
+                if (!doc) return;
+                
+                // 【修改】读取本地存储的开关状态（默认 'true' 开启隐藏）
+                const hideFootnotesEnabled = localStorage.getItem('moyu_epub_hide_footnotes') !== 'false';
+
+                if (hideFootnotesEnabled) {
+                    setTimeout(() => {
+                        if (!doc) return;
+                        doc.querySelectorAll('[id^="m"], [id^="fn"], [id^="note"], [id^="ftn"], .footnotes, .endnotes, .footnote, .endnote, div.notes').forEach(el => {
+                            const id = (el.id || '').toLowerCase();
+                            const className = (el.className || '').toLowerCase();
+                            const epubType = (el.getAttribute('epub:type') || '').toLowerCase();
+
+                            const isFootnote =
+                                epubType.includes('endnote') ||
+                                epubType.includes('footnote') ||
+                                /endnote|footnote|rearnote/i.test(id) ||
+                                /endnote|footnote|rearnote/i.test(className) ||
+                                /^(m|fn|note|ftn)\d+$/i.test(id) ||
+                                /^(m|fn|note|ftn)\d+$/i.test(className);
+
+                            if (isFootnote) {
+                                el.style.display = 'none';
+                                if (el.parentElement && ['p', 'div', 'li'].includes(el.parentElement.tagName.toLowerCase())) {
+                                    el.parentElement.style.display = 'none';
+                                }
+                            }
+                        });
+                    }, 50);
+                }
+
+                // 滚轮翻页处理
+
+                
+                if (doc._wheelHandler) {
+                    doc.removeEventListener('wheel', doc._wheelHandler, { passive: false });
+                }
+
+                doc._wheelHandler = (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    if (ev.deltaY > 0) {
+                        view.next();
+                    } else {
+                        view.prev();
+                    }
+                };
+
+                doc.addEventListener('wheel', doc._wheelHandler, { passive: false });
+
+                // 3. 点击关闭弹窗处理
+                if (doc._clickCloseHandler) {
+                    doc.removeEventListener('click', doc._clickCloseHandler);
+                }
+                doc._clickCloseHandler = () => {
+                    hideFootnotePopup();
+                };
+                doc.addEventListener('click', doc._clickCloseHandler);
+                // ========== 新增：键盘方向键翻页支持 ==========
+                // 1. 监听主窗口的键盘事件
+                window.addEventListener('keydown', (e) => {
+                    if (!view) return;
+                
+                    // 如果当前焦点在输入框、下拉菜单等元素上，不拦截键盘事件
+                    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+
+                    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        view.prev(); // 左、上键：上一页
+                    } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        view.next(); // 右、下键：下一页
+                    }
+                });
+
+
+            });
+
+            // 读取本地文件流
+            let file;
+            try {
+                const buffer = fs.readFileSync(filePath);
+                const fileName = path.basename(filePath);
+                file = new File([buffer], fileName, { type: 'application/epub+zip' });
+            } catch (err) {
+                console.error('读取文件失败:', err);
+                alert('无法读取文件: ' + err.message);
+                isInitializing = false;
+                return;
+            }
+
+            try {
+                await view.open(file);
+            } catch (err) {
+                console.error('打开书籍失败:', err);
+                alert('打开失败: ' + (err.message || err));
+                isInitializing = false;
+                return;
+            }
+
+            applyStyles();
+
+            if (view.book?.toc) {
+                populateTOC(view.book.toc);
+            }
+
+            // 恢复阅读进度
+            const storageKey = getStorageKey(filePath);
+            const savedCfi = localStorage.getItem(storageKey);
+
+            try {
+                if (savedCfi) {
+                    await view.goTo(savedCfi);
+                } else if (typeof view.goToTextStart === 'function') {
+                    await view.goToTextStart();
+                } else {
+                    await view.next();
+                }
+            } catch (e) {
+                console.warn('恢复位置失败', e);
+                try { await view.next(); } catch (_) {}
+            }
+
+            setTimeout(() => {
+                isInitializing = false;
+            }, 800);
+        }
+
+        // 页面初始化加载
+        window.addEventListener('load', async () => {
+            await initSystemFonts();
+
+            // 恢复保存的背景颜色
+            const savedBg = localStorage.getItem('moyu_epub_bg_color');
+            if (savedBg) document.body.style.backgroundColor = savedBg;
+
+            // 恢复上次阅读的书籍
+            const lastBookPath = localStorage.getItem('moyu_epub_last_path');
+            if (lastBookPath && fs.existsSync(lastBookPath)) {
+                await loadBook(lastBookPath);
+            }
+
+            // 打开本地 EPUB 文件按钮事件
+            document.getElementById('open-file-btn').addEventListener('click', async () => {
+                const filePath = await ipcRenderer.invoke('dialog:open-epub');
+                if (filePath) {
+                    localStorage.setItem('moyu_epub_last_path', filePath);
+                    await loadBook(filePath);
+                    document.getElementById('settings-panel').style.display = 'none';
+                }
+            });
+
+            // 目录跳转事件
+            document.getElementById('toc-select').addEventListener('change', async (e) => {
+                const href = e.target.value;
+                if (href && view) {
+                    try {
+                        await view.goTo(href);
+                    } catch (err) {
+                        console.error('跳转失败', err);
+                    }
+                    document.getElementById('settings-panel').style.display = 'none';
+                }
+            });
+
+            // 摸鱼模式（F1快捷键触发）切换
+            const settingsBtn = document.getElementById('settings-btn');
+            const settingsPanel = document.getElementById('settings-panel');
+            const topBar = document.getElementById('top-bar');
+
+            ipcRenderer.on('toggle-moyu', () => {
+                isMoyuMode = !isMoyuMode;
+                if (isMoyuMode) {
+                    settingsBtn.style.display = 'none';
+                    settingsPanel.style.display = 'none';
+                    topBar.style.display = 'none';
+                    document.documentElement.style.borderRadius = '0';
+                    document.body.style.borderRadius = '0';
+                    document.body.style.border = 'none';
+                    document.documentElement.style.border = 'none';
+                } else {
+                    settingsBtn.style.display = 'block';
+                    topBar.style.display = 'block';
+                    document.documentElement.style.borderRadius = '8px';
+                    document.body.style.borderRadius = '8px';
+                    document.body.style.border = '1px solid rgba(0,0,0,0.12)';
+                    document.documentElement.style.border = '1px solid rgba(0,0,0,0.12)';
+                }
+            });
+
+            // 菜单按钮点击切换设置面板显示状态
+            settingsBtn.addEventListener('click', () => {
+                const settingsPanel = document.getElementById('settings-panel');
+                settingsPanel.style.display =
+                    settingsPanel.style.display === 'block' ? 'none' : 'block';
+            });
+
+            // 点击空白处关闭菜单与脚注弹窗
+            window.addEventListener('click', (e) => {
+                if (!e.target.closest('#footnote-popup') &&
+                    !e.target.closest('#settings-btn') &&
+                    !e.target.closest('#settings-panel')) {
+                    hideFootnotePopup();
+                    document.getElementById('settings-panel').style.display = 'none';
+                }
+            });
+
+            // 全局屏幕实时取色器
+            document.getElementById('color-picker-btn').addEventListener('click', async () => {
+                settingsPanel.style.display = 'none';
+                
+                const tipOverlay = document.createElement('div');
+                tipOverlay.id = 'color-picker-tip';
+                tipOverlay.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: rgba(0, 0, 0, 0.85);
+                    color: white;
+                    padding: 10px 20px;
+                    border-radius: 8px;
+                    font-size: 14px;
+                    z-index: 99999;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                    pointer-events: none;
+                `;
+                tipOverlay.innerHTML = '🎯 请将鼠标移至目标颜色处，<b>按回车键 (Enter)</b> 确认取色，<b>ESC</b> 取消';
+                document.body.appendChild(tipOverlay);
+
+                const onKeydown = async (e) => {
+                    if (e.key === 'Escape') {
+                        cleanup();
+                    } else if (e.key === 'Enter') {
+                        const result = await ipcRenderer.invoke('color-picker:start');
+                        if (result.error) {
+                            alert('取色失败: ' + result.error);
+                        } else if (result.hex) {
+                            document.body.style.backgroundColor = result.hex;
+                            localStorage.setItem('moyu_epub_bg_color', result.hex);
+                        }
+                        cleanup();
+                    }
+                };
+
+                function cleanup() {
+                    window.removeEventListener('keydown', onKeydown);
+                    const tip = document.getElementById('color-picker-tip');
+                    if (tip) tip.remove();
+                }
+
+                window.addEventListener('keydown', onKeydown);
+            });
+
+            // 字体选择改变事件
+            document.getElementById('font-select').addEventListener('change', (e) => {
+                localStorage.setItem('moyu_epub_font', e.target.value);
+                applyStyles();
+            });
+
+            // 字体大小调节滑块事件
+            const fontSizeRange = document.getElementById('font-size-range');
+            const fontSizeVal = document.getElementById('font-size-val');
+            const savedFontSize = localStorage.getItem('moyu_epub_font_size') || '16px';
+            fontSizeRange.value = parseInt(savedFontSize);
+            fontSizeVal.textContent = savedFontSize;
+
+            fontSizeRange.addEventListener('input', (e) => {
+                const size = e.target.value + 'px';
+                fontSizeVal.textContent = size;
+                localStorage.setItem('moyu_epub_font_size', size);
+                applyStyles();
+            });
+            
+            // ========== 新增：文末注释隐藏开关的交互逻辑 ==========
+            const toggleFootnotesBtn = document.getElementById('toggle-footnotes-btn');
+            let isHideFootnotes = localStorage.getItem('moyu_epub_hide_footnotes') !== 'false';
+
+            // 更新按钮显示的文案与样式
+            function updateFootnotesBtnUI() {
+                if (isHideFootnotes) {
+                    toggleFootnotesBtn.textContent = '📖 隐藏文末注释：已开启';
+                    toggleFootnotesBtn.style.background = '#e0e0e0';
+                    toggleFootnotesBtn.style.color = '#333';
+                } else {
+                    toggleFootnotesBtn.textContent = '📖 隐藏文末注释：已关闭';
+                    toggleFootnotesBtn.style.background = '#4CAF50';
+                    toggleFootnotesBtn.style.color = 'white';
+                }
+            }
+            updateFootnotesBtnUI();
+
+            // 点击按钮切换状态，并刷新当前页面生效
+            toggleFootnotesBtn.addEventListener('click', async () => {
+                isHideFootnotes = !isHideFootnotes;
+                localStorage.setItem('moyu_epub_hide_footnotes', isHideFootnotes);
+                updateFootnotesBtnUI();
+
+                // 切换后如果当前有打开的书籍，重新加载当前章节让设置立刻生效
+                if (view && currentBookPath) {
+                    try {
+                        const currentCfi = view.lastLocation?.cfi;
+                        if (currentCfi) {
+                            await view.goTo(currentCfi);
+                        }
+                    } catch (err) {
+                        console.error('刷新页面失败', err);
+                    }
+                }
+            });
+
+        });
+    </script>
+</body>
+</html>

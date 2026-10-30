@@ -1,0 +1,43 @@
+{
+  "name": "epub-reader",
+  "version": "1.0.0",
+  "description": "A stealth EPUB reader",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.13.3",
+    "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.6",
+    "epubjs": "^0.3.93",
+    "jszip": "^3.10.1"
+  },
+  "build": {
+    "appId": "com.moyu.epubreader",
+    "productName": "MoyuEpubReader",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "index.html",
+      "node_modules/**/*",
+      "foliate-js/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}
